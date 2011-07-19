@@ -193,11 +193,11 @@ function movePlayer(e) {
     areaHeight = parseInt(map_area.css("height"));
   switch(e.keyCode) {
 // DEBUG ONLY
-    case 13:
-      xy = prompt("current: " + playerLeft + " " + playerTop);
-      xy = xy.split(" ");
-      myPlayer.css({left: parseInt(xy[0]), top: parseInt(xy[1])});
-      break;
+//    case 13:
+//      xy = prompt("current: " + playerLeft + " " + playerTop);
+//      xy = xy.split(" ");
+//      myPlayer.css({left: parseInt(xy[0]), top: parseInt(xy[1])});
+//      break;
     case 37:
     if(e.preventDefault) e.preventDefault(); else e.returnValue = false;
     for(var i in cur_map.wallItems) {
@@ -438,7 +438,7 @@ map = {
  done: function() {
    dconsole.innerHTML += "Map \"" + cur_map.map_name + "\" loaded, used textures: " + cur_map.textures_cnt + ", items: " + cur_map.items_cnt + "<br>";
    // select avatar and nickname
-   /*$.prompt("", {
+   $.prompt("", {
  	   submit: function() {
        if(!join_avatar) return false;
        NICK = $("#nick").val();
@@ -457,9 +457,9 @@ map = {
   	 buttons: {Join: 'Join'},
      opacity: 0.5,
      top: "40%"
-   });*/
+   });
 // DEBUG ONLY
-join_avatar = cur_map.avatars[0];
+/*join_avatar = cur_map.avatars[0];
        NICK = "tester";
        myPlayer = createPlayer();
        myPlayer.avatar = join_avatar;
@@ -472,7 +472,7 @@ join_avatar = cur_map.avatars[0];
        else
          document.onkeypress = movePlayer;
        return;
-
+*/
 
    join_current_av = null;
    join_avatar = null;
@@ -590,7 +590,7 @@ join_avatar = cur_map.avatars[0];
    if(typeof it_opts != "object") it_opts = {};
    var item = $("<div></div>")
 // DEBUG ONLY
-     .click(function() { alert("#" + this.id + "\nposition: " + this.style.left + " " + this.style.top + " " + this.style.width + " " + this.style.height) })
+//     .click(function() { alert("#" + this.id + "\nposition: " + this.style.left + " " + this.style.top + " " + this.style.width + " " + this.style.height) })
 
      .attr("id", it_name)
      .css({position: "absolute", zIndex: 1});
