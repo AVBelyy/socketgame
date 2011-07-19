@@ -1,0 +1,698 @@
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<script type="text/javascript" src="resources/iepngfix_tilebg.js"></script>  
+<script type="text/javascript" src="resources/jquery.min.js"></script>
+<script type="text/javascript" src="resources/jcarousellite.min.js"></script>
+<script type="text/javascript" src="resources/jquery-impromptu.3.1.min.js"></script>
+<script type="text/javascript" src="resources/socket.io.js"></script>
+<link rel="stylesheet" type="text/css" href="resources/jquery-impromptu.css">
+<style type="text/css">
+img, div { behavior: url(resources/iepngfix.htc) }
+</style>
+</head>
+<body style="overflow: scroll">
+<div id="console" style="position: fixed; font-family: monospace; font-size: 14px; width: 50%; height: 50%; color: green; left: 0px; bottom: 0px; z-index: 100">
+</div>
+<script type="text/javascript">
+players = [];
+nicks = [];
+svars = [];
+svarsCallback = [];
+tfFlag = false;
+cur_map = {map_path: "", map_name: "", textures: [], textures_cnt: 0, items: [], items_cnt: 0, wallItems: [], triggerItems: [], activeTrigger: null, avatars: []};
+map_vars = {};
+map_area = null;
+STEP_SIZE = 10;
+HOST = "127.0.0.1";
+ROOT_PATH = "http://127.0.0.1:8124/";
+NICK = "";
+dconsole = document.getElementById("console");
+
+// jQuery plugin which returns map
+jQuery.fn.done = function() {
+if(cur_map.items[this.attr("id")])
+  if(cur_map.items[this.attr("id")].needToApply) {
+    cur_map.items[this.attr("id")].needToApply = false;
+    map.applyOpts(this);
+  }
+  return map;
+};
+
+// link to map.fill()
+jQuery.fn.fill = function(tex_name) {
+  return this.each(function() {
+    map.fill(tex_name, jQuery(this));
+  });
+};
+
+// link to map.applyOpts()
+jQuery.fn.applyOpts = function() {
+  return this.each(function() {
+    map.applyOpts(jQuery(this));
+  });
+};
+
+// opacity plugin
+jQuery.fn.opacity = function(op_value) {
+  return this.each(function() {
+    jQuery(this).fadeTo(1, op_value);
+  });
+};
+
+jQuery.fn.setWallProperties = function(props) {
+  return this.each(function() {
+    for(var i = 0; i < cur_map.wallItems.length; i++) {
+      var wall = cur_map.wallItems[i];
+      if(wall.it_name == this.id) {
+        if(props == "normal")
+          props = [
+            parseInt(this.style.left),
+            parseInt(this.style.top),
+            parseInt(this.style.width),
+            parseInt(this.style.height)
+          ];
+        if(typeof props == "object" && props.length) {
+          wall.left = props[0];
+          wall.top = props[1];
+          wall.width = props[2];
+          wall.height = props[3];
+          cur_map.wallItems[i] = wall;
+        };
+        break;
+      };
+    };
+  });
+};
+
+function GoGoGo() {
+  dconsole.innerHTML = "Trying to connect to " + (HOST || "localhost") + "..<br>";
+  timeout = setTimeout(function() {
+    dconsole.innerHTML += "Connection error: Timeout (10 s)";
+  }, 10000);
+  socket = new io.Socket(HOST, {rememberTransport: false, port: 8124});
+  socket.connect();
+  socket.on("connect", function() {
+     clearTimeout(timeout);
+     dconsole.innerHTML += "Connection established<br>";
+  });
+  socket.on("message", function(data) {
+    var jdata = JSON.parse(data);
+    switch(jdata.act) {
+      case "welcome":
+       map_area = $("<div style='position: absolute; left: 0px; top: 0px; overflow: hidden'></div>").appendTo("body");
+       if(typeof jdata.map == "string") map.load(jdata.map);
+       var jplayers = jdata.players;
+       if(jdata.motd) {
+         dconsole.innerHTML += "<br><div style='border-top: solid 1px; border-bottom: solid 1px'>" + jdata.motd + "</div><br>";
+       };
+       for(i in jdata.svars) {
+         var svar_info = jdata.svars[i];
+         svars[svar_info.svar] = svar_info.value;
+         if(typeof svarsCallback[svar_info.svar] == "function") svarsCallback[svar_info.svar](svar_info.playerId.toString(), svar_info.value);
+       };
+       var output = (jplayers.length) ? ("Now online " + (jplayers.length + 1) + " players: ") : "There is no players online, you'll be first :-)";
+       for(var i in jplayers) {
+         jplayers[i].avatar.newTexture = true;
+         players[jplayers[i].playerId.toString()] = createPlayer(jplayers[i].x, jplayers[i].y);
+         players[jplayers[i].playerId.toString()].avatar = jplayers[i].avatar;
+         players[jplayers[i].playerId.toString()].fill(jplayers[i].avatar);
+         players[jplayers[i].playerId.toString()].title.html(jplayers[i].nick);
+         nicks[jplayers[i].playerId.toString()] = jplayers[i].nick;
+         output += jplayers[i].nick + " ";
+       };
+       dconsole.innerHTML += (jplayers.length) ? (output + "<i>and you</i><br>") : (output + "<br>");
+       break;
+      case "setsvar":
+      case "getsvar":
+       svars[jdata.svar] = jdata.value;
+       if(typeof svarsCallback[jdata.svar] == "function") svarsCallback[jdata.svar](jdata.playerId.toString(), jdata.value);
+       break;
+      case "newplayer":
+       players[jdata.playerId.toString()] = createPlayer();
+       players[jdata.playerId.toString()].fill(jdata.avatar);
+       players[jdata.playerId.toString()].avatar = jdata.avatar;
+       players[jdata.playerId.toString()].title.html(jdata.nick);
+       nicks[jdata.playerId.toString()] = jdata.nick;
+       dconsole.innerHTML += jdata.nick + " has joined game<br>";
+       break;
+      case "newnick":
+       if(jdata.playerId) {
+         dconsole.innerHTML += nicks[jdata.playerId.toString()] + " is now known as " + jdata.nick + "<br>";
+         nicks[jdata.playerId.toString()] = jdata.nick;
+         players[jdata.playerId.toString()].title.html(jdata.nick);
+       } else {
+         dconsole.innerHTML += "You changed nick to " + jdata.nick + "<br>";
+       };
+       break;
+      case "displayer":
+       delete nicks[jdata.playerId.toString()];
+       dconsole.innerHTML += jdata.nick + " has left game<br>";
+       players[jdata.playerId.toString()].fadeOut("slow", function() {
+         players[jdata.playerId.toString()].remove();
+       });
+       break;
+      case "move":
+       var pid = jdata.playerId.toString();
+       switch(jdata.dir) {
+         case "left":  players[pid].css({left: (parseInt(players[pid].css("left")) - jdata.step) + "px"}); break;
+         case "right": players[pid].css({left: (parseInt(players[pid].css("left")) + jdata.step) + "px"}); break;
+         case "up":    players[pid].css({top: (parseInt(players[pid].css("top")) - jdata.step) + "px"}); break;
+         case "down":  players[pid].css({top: (parseInt(players[pid].css("top")) + jdata.step) + "px"}); break;
+       };
+       break;
+      case "move_a":
+       players[jdata.playerId.toString()].css({left: jdata.x, top: jdata.y});
+       break;
+    };
+  });
+};
+
+function createPlayer(x, y) {
+  var player = $("<div style='position: absolute; left: 0px; top: 0px; display: none'></div>")
+  .css({width: "100px"})
+  .css({height: "100px"})
+  .css({left: (x ? x + "px" : "0px")})
+  .css({top: (y ? y + "px" : "0px")})
+  .css({zIndex: 1})
+  .appendTo(map_area).fadeIn("slow");
+  player.title = $("<div style='margin-top: -15px; width: 100%; height: 25px; overflow: hidden; text-align: center; font: 12px bold'></div>").appendTo(player);
+  return player;
+};
+
+function movePlayer(e) {
+  if(!e) e = window.event;
+  var
+    playerLeft = parseInt(myPlayer.css("left")),
+    playerTop = parseInt(myPlayer.css("top")),
+    playerWidth = parseInt(myPlayer.css("width")),
+    playerHeight = parseInt(myPlayer.css("height")),
+    areaLeft = parseInt(map_area.css("left")),
+    areaTop = parseInt(map_area.css("top")),
+    areaWidth = parseInt(map_area.css("width")),
+    areaHeight = parseInt(map_area.css("height"));
+  switch(e.keyCode) {
+// DEBUG ONLY
+    case 13:
+      xy = prompt("current: " + playerLeft + " " + playerTop);
+      xy = xy.split(" ");
+      myPlayer.css({left: parseInt(xy[0]), top: parseInt(xy[1])});
+      break;
+    case 37:
+    if(e.preventDefault) e.preventDefault(); else e.returnValue = false;
+    for(var i in cur_map.wallItems) {
+       var wall = cur_map.wallItems[i];
+       if(playerLeft - STEP_SIZE < wall.left + wall.width)
+       if(playerLeft + playerWidth - STEP_SIZE > wall.left)
+       if(playerTop < wall.top + wall.height)
+       if(playerTop + playerHeight > wall.top) {
+         var step = playerLeft - wall.left - wall.width;
+         myPlayer.css({left: playerLeft - step});
+         socket.send({act: "move", dir: "left", step: step});
+         return;
+       };
+     };
+     if(playerLeft < STEP_SIZE)
+       var stepSize = playerLeft;
+     else
+       var stepSize = STEP_SIZE;
+     var allow = true;
+     var viewableArea = playerLeft;
+     if(viewableArea > parseInt(window.innerWidth / 2)) viewableArea = parseInt(window.innerWidth / 2);
+     if(playerLeft - viewableArea < -areaLeft)
+       if(areaLeft < 0)
+         map_area.css({left: areaLeft + 10});
+       else allow = false;
+     if(allow) {
+       socket.send({act: "move", dir: "left", step: stepSize});
+       myPlayer.css({left: playerLeft - stepSize});
+     };
+     trFlag = false;
+     for(var i in cur_map.triggerItems) {
+       var trigger = cur_map.triggerItems[i];
+       if(playerLeft >= parseInt(trigger.css("left")))
+       if(playerTop >= parseInt(trigger.css("top")))
+       if((playerLeft + playerWidth) <= (parseInt(trigger.css("left")) + parseInt(trigger.css("width"))))
+       if((playerTop + playerHeight) <= (parseInt(trigger.css("top")) + parseInt(trigger.css("height")))) {
+         trFlag = true;
+         if(cur_map.activeTrigger != trigger) {
+           cur_map.activeTrigger = trigger;
+           if(trigger.shared) socket.send({act: "setsvar", svar: trigger.tr_name + "_state", value: "over"});
+           trigger.onPlayerOver("right");
+         };
+       };
+       if(!trFlag && cur_map.activeTrigger)
+       if(playerLeft + playerWidth <= parseInt(cur_map.activeTrigger.css("left"))) {
+         if(cur_map.activeTrigger.shared) socket.send({act: "setsvar", svar: cur_map.activeTrigger.tr_name + "_state", value: "out"});
+         cur_map.activeTrigger.onPlayerOut("left");
+         cur_map.activeTrigger = null;
+       };
+     };
+     break;
+    case 38:
+    if(e.preventDefault) e.preventDefault(); else e.returnValue = false;
+     for(var i in cur_map.wallItems) {
+       var wall = cur_map.wallItems[i];
+       if(playerLeft < wall.left + wall.width)
+       if(playerLeft + playerWidth > wall.left)
+       if(playerTop - STEP_SIZE < wall.top + wall.height)
+       if(playerTop + playerHeight - STEP_SIZE > wall.top) {
+         var step = playerTop - wall.top - wall.height;
+         myPlayer.css({top: playerTop - step});
+         socket.send({act: "move", dir: "up", step: step});
+         return;
+       };
+     };
+     if(playerTop < STEP_SIZE)
+       var stepSize = playerTop;
+     else
+       var stepSize = STEP_SIZE;
+     var allow = true;
+     var viewableArea = playerTop;
+     if(viewableArea > parseInt(window.innerHeight / 2)) viewableArea = parseInt(window.innerHeight / 2);
+     if(playerTop - viewableArea < -areaTop)
+       if(areaTop < 0)
+         map_area.css({top: areaTop + 10});
+       else allow = false;
+     if(allow) {
+       socket.send({act: "move", dir: "up", step: stepSize});
+       myPlayer.css({top: playerTop - stepSize});
+     };
+     trFlag = false;
+     for(var i in cur_map.triggerItems) {
+       var trigger = cur_map.triggerItems[i];
+       if(playerLeft >= parseInt(trigger.css("left")))
+       if(playerTop >= parseInt(trigger.css("top")))
+       if((playerLeft + playerWidth) <= (parseInt(trigger.css("left")) + parseInt(trigger.css("width"))))
+       if((playerTop + playerHeight) <= (parseInt(trigger.css("top")) + parseInt(trigger.css("height")))) {
+         trFlag = true;
+         if(cur_map.activeTrigger != trigger) {
+           cur_map.activeTrigger = trigger;
+           if(trigger.shared) socket.send({act: "setsvar", svar: trigger.tr_name + "_state", value: "over"});
+           trigger.onPlayerOver("bottom");
+         };
+       };
+     };
+     if(!trFlag && cur_map.activeTrigger)
+     if(playerTop + playerHeight <= parseInt(cur_map.activeTrigger.css("top"))) {
+       if(cur_map.activeTrigger.shared) socket.send({act: "setsvar", svar: cur_map.activeTrigger.tr_name + "_state", value: "out"});
+       cur_map.activeTrigger.onPlayerOut("top");
+       cur_map.activeTrigger = null;
+     };
+     break;
+    case 39:
+    if(e.preventDefault) e.preventDefault(); else e.returnValue = false;
+     for(var i in cur_map.wallItems) {
+       var wall = cur_map.wallItems[i];
+       if(playerLeft + STEP_SIZE < wall.left + wall.width)
+       if(playerLeft + playerWidth + STEP_SIZE > wall.left)
+       if(playerTop < wall.top + wall.height)
+       if(playerTop + playerHeight > wall.top) {
+         var step = wall.left - playerLeft - playerWidth;
+         myPlayer.css({left: playerLeft + step});
+         socket.send({act: "move", dir: "right", step: step});
+         return;
+       };
+     };
+     var allow = true;
+     var viewableArea = areaWidth - playerLeft - 100;
+     if(viewableArea > parseInt(window.innerWidth / 2)) viewableArea = parseInt(window.innerWidth / 2);
+     if(playerLeft + 100 + viewableArea > window.innerWidth - areaLeft)
+       if(areaLeft + areaWidth > window.innerWidth)
+         map_area.css({left: areaLeft - STEP_SIZE});
+       else
+         allow = false;
+     if(allow) if(playerLeft + 100 + STEP_SIZE < areaWidth) {
+       myPlayer.css({left: playerLeft + STEP_SIZE});
+       socket.send({act: "move", dir: "right", step: STEP_SIZE});
+     };
+     trFlag = false;
+     for(var i in cur_map.triggerItems) {
+       var trigger = cur_map.triggerItems[i];
+       if(playerLeft >= parseInt(trigger.css("left")))
+       if(playerTop >= parseInt(trigger.css("top")))
+       if((playerLeft + playerWidth) <= (parseInt(trigger.css("left")) + parseInt(trigger.css("width"))))
+       if((playerTop + playerHeight) <= (parseInt(trigger.css("top")) + parseInt(trigger.css("height")))) {
+         trFlag = true;
+         if(cur_map.activeTrigger != trigger) {
+           cur_map.activeTrigger = trigger;
+           if(trigger.shared) socket.send({act: "setsvar", svar: trigger.tr_name + "_state", value: "over"});
+           trigger.onPlayerOver("left");
+         };
+       };
+     };
+     if(!trFlag && cur_map.activeTrigger)
+     if(parseInt(cur_map.activeTrigger.css("left")) + parseInt(cur_map.activeTrigger.css("width")) <= playerLeft) {
+       if(cur_map.activeTrigger.shared) socket.send({act: "setsvar", svar: cur_map.activeTrigger.tr_name + "_state", value: "out"});
+       cur_map.activeTrigger.onPlayerOut("right");
+       cur_map.activeTrigger = null;
+     };
+     break;
+    case 40:
+    if(e.preventDefault) e.preventDefault(); else e.returnValue = false;
+     for(var i in cur_map.wallItems) {
+       var wall = cur_map.wallItems[i];
+       if(playerLeft < wall.left + wall.width)
+       if(playerLeft + playerWidth > wall.left)
+       if(playerTop + STEP_SIZE < wall.top + wall.height)
+       if(playerTop + playerHeight + STEP_SIZE > wall.top) {
+         var step = wall.top - playerTop - playerHeight;
+         myPlayer.css({top: playerTop + step});
+         socket.send({act: "move", dir: "down", step: step});
+         return;
+       };
+     };
+     var allow = true;
+     var viewableArea = areaHeight - playerTop - 100;
+     if(viewableArea > parseInt(window.innerHeight / 2)) viewableArea = parseInt(window.innerHeight / 2);
+     if(playerTop + 100 + viewableArea > window.innerHeight - areaTop)
+       if(areaTop + areaHeight > window.innerHeight)
+         map_area.css({top: areaTop - STEP_SIZE});
+       else
+         allow = false;
+     if(allow) if(playerTop + 100 + STEP_SIZE < areaHeight) {
+       myPlayer.css({top: playerTop + STEP_SIZE});
+       socket.send({act: "move", dir: "down", step: STEP_SIZE});
+     };
+     trFlag = false;
+     for(var i in cur_map.triggerItems) {
+       var trigger = cur_map.triggerItems[i];
+       if(playerLeft >= parseInt(trigger.css("left")))
+       if(playerTop >= parseInt(trigger.css("top")))
+       if((playerLeft + playerWidth) <= (parseInt(trigger.css("left")) + parseInt(trigger.css("width"))))
+       if((playerTop + playerHeight) <= (parseInt(trigger.css("top")) + parseInt(trigger.css("height")))) {
+         trFlag = true;
+         if(cur_map.activeTrigger != trigger) {
+           cur_map.activeTrigger = trigger;
+           if(trigger.shared) socket.send({act: "setsvar", svar: trigger.tr_name + "_state", value: "over"});
+           trigger.onPlayerOver("top");
+         };
+       };
+     };
+     if(!trFlag && cur_map.activeTrigger)
+     if(parseInt(cur_map.activeTrigger.css("top")) + parseInt(cur_map.activeTrigger.css("height")) <= playerTop) {
+       if(cur_map.activeTrigger.shared) socket.send({act: "setsvar", svar: cur_map.activeTrigger.tr_name + "_state", value: "out"});
+       cur_map.activeTrigger.onPlayerOut("bottom");
+       cur_map.activeTrigger = null;
+     };
+     break;
+  };
+};
+
+function setElementOpacity(elem, nOpacity) {
+  var opacityProp = getOpacityProperty();
+  if(!elem || !opacityProp) return;
+
+  if(opacityProp == "filter") {
+    nOpacity *= 100;
+    var oAlpha = elem.filters["DXImageTransform.Microsoft.alpha"] || elem.filters.alpha;
+    if (oAlpha) oAlpha.opacity = nOpacity;
+    else elem.style.filter += "progid:DXImageTransform.Microsoft.Alpha(opacity="+nOpacity+")";
+	} else elem.style[opacityProp] = nOpacity;
+};
+
+function getOpacityProperty() {
+  if(typeof document.body.style.opacity == 'string')
+    return 'opacity';
+  else if(typeof document.body.style.MozOpacity == 'string')
+    return 'MozOpacity';
+  else if(typeof document.body.style.KhtmlOpacity == 'string')
+    return 'KhtmlOpacity';
+  else if(document.body.filters && navigator.appVersion.match(/MSIE ([\d.]+);/)[1]>=5.5)
+    return 'filter';
+
+  return false;
+};
+
+map = {
+ load: function(map_name) {
+   var map_path = ROOT_PATH + "maps/" + map_name + "/";
+   cur_map.map_path = map_path;
+   cur_map.map_name = map_name;
+   var script = document.createElement("script");
+   script.setAttribute("type", "text/javascript")
+   script.setAttribute("src", map_path + "map.js");
+   document.getElementsByTagName("head")[0].appendChild(script);
+   return cur_map;
+ },
+ done: function() {
+   dconsole.innerHTML += "Map \"" + cur_map.map_name + "\" loaded, used textures: " + cur_map.textures_cnt + ", items: " + cur_map.items_cnt + "<br>";
+   // select avatar and nickname
+   /*$.prompt("", {
+ 	   submit: function() {
+       if(!join_avatar) return false;
+       NICK = $("#nick").val();
+       myPlayer = createPlayer();
+       myPlayer.avatar = join_avatar;
+       myPlayer.fill(join_avatar);
+       myPlayer.title.html(NICK);
+       socket.send({act: "join", nick: NICK, avatar: join_avatar});
+       $("#console").fadeOut("slow");
+       if($.browser.webkit || $.browser.msie)
+         document.onkeydown = movePlayer;
+       else
+         document.onkeypress = movePlayer;
+       return true;
+     },
+  	 buttons: {Join: 'Join'},
+     opacity: 0.5,
+     top: "40%"
+   });*/
+// DEBUG ONLY
+join_avatar = cur_map.avatars[0];
+       NICK = "tester";
+       myPlayer = createPlayer();
+       myPlayer.avatar = join_avatar;
+       myPlayer.fill(join_avatar);
+       myPlayer.title.html(NICK);
+       socket.send({act: "join", nick: NICK, avatar: join_avatar});
+       $("#console").fadeOut("slow");
+       if($.browser.webkit || $.browser.msie)
+         document.onkeydown = movePlayer;
+       else
+         document.onkeypress = movePlayer;
+       return;
+
+
+   join_current_av = null;
+   join_avatar = null;
+   var join_wnd = $("<span>Your nickname:<br><input id='nick' value='anonymous'><br><br>Select avatar, please</span><br>").appendTo($(".jqimessage"));
+   if(cur_map.avatars.length > 4) var join_btns = $("<div><span style='cursor: pointer' id='prev'>&lt;&lt;</span> <span style='cursor: pointer' id='next'>&gt;&gt;</span></div>").appendTo($(".jqimessage"));
+   var join_div = $("<div style='width: 400px; height: 100px'></div>").appendTo($(".jqimessage"));
+   var join_ul = $("<ul></ul>").appendTo(join_div);
+   for(var i in cur_map.avatars) {
+     $("<li><div id='join_avatar" + i + "' style='width: 100px; cursor: pointer; height: 100px;'></div></li>").appendTo(join_ul).click(function() {
+       var item = $(this.childNodes[0]);
+       if(join_current_av) {
+         join_current_av.css({border: "none 0px"});
+         join_current_av.css({backgroundPosition: "0px 0px"});
+         join_current_av.css({width: "100px"});
+         join_current_av.css({height: "100px"});
+         join_current_av.children().remove();
+       };
+       join_current_av = item;
+       join_avatar = cur_map.avatars[this.childNodes[0].id.substr(11)];
+       item.css({
+         border: "dashed 1px",
+         backgroundPosition: "-1px -1px",
+         width: "98px",
+         height: "98px"
+       });
+       $("<div>").css({width: "100%", height: "100%", background: "blue"}).opacity(0.1).appendTo(item);
+     });
+     $("#join_avatar" + i).fill(cur_map.avatars[i]);
+   };
+   join_div.jCarouselLite({
+    btnNext: "#next",
+    btnPrev: "#prev",
+    visible: 4,
+    circular: false
+   });
+   return true;
+ },
+ createTexture: function(tex_name, tex_opts) {
+   if(typeof tex_name != "string" || typeof tex_opts != "object" || cur_map.textures[tex_name]) return map;
+   cur_map.textures_cnt += 1;
+   cur_map.textures[tex_name] = tex_opts;
+   cur_map.textures[tex_name].newTexture = true;
+   return map;
+ },
+ svarSet: function(svar, value) {
+   if(typeof svar == "string") socket.send({act: "setsvar", svar: svar, value: value});
+   return map;
+ },
+ svarGet: function(svar, callback) {
+   if(typeof svar == "string") {
+     if(typeof callback == "function") svarsCallback[svar] = callback;
+     socket.send({act: "getsvar", svar: svar});
+   };
+   return map;
+ },
+ svarCallback: function(svar, callback) {
+   if(typeof svar == "string" && typeof callback == "function") svarsCallback[svar] = callback;
+   if(svars[svar]) callback("0", svars[svar]);
+   return map;
+ },
+ applyOpts: function(it_name) {
+   var item = map.getItem(it_name);
+   if(!item) return map;
+   var
+     opts = cur_map.items[item.attr("id")].props,
+     props = opts.properties,
+     mo = opts.moveOffset;
+   if(props) for(i in props) {
+     var prop = props[i];
+     if(prop == "background") {
+       item.css({zIndex: 0});
+     };
+     if(prop == "wall") {
+       for(i in cur_map.wallItems) {
+         var wallItem = cur_map.wallItems[i];
+         var item_name = item.attr("id");
+         if(wallItem.it_name == item_name) var wallId = i;
+       };
+       var
+         playerLeft = parseInt(item.css("left")),
+         playerTop = parseInt(item.css("top")),
+         playerWidth = parseInt(item.css("width")),
+         playerHeight = parseInt(item.css("height"));
+       if(mo) {
+        playerLeft -= mo[0];
+        playerTop -= mo[1];
+        playerWidth += mo[0] + mo[2];
+        playerHeight += mo[1] + mo[3];
+       };
+       var item_data = {it_name: item.attr("id"), left: playerLeft, top: playerTop, width: playerWidth, height: playerHeight};
+       if(wallId) cur_map.wallItems[wallId] = item_data; else cur_map.wallItems.push(item_data);
+     };
+     if(prop == "trigger") {
+       var id = cur_map.triggerItems.push(item) - 1;
+       cur_map.triggerItems[id].onPlayerOver = (typeof opts.onPlayerOver == "function") ? opts.onPlayerOver : (function() {return true});
+       cur_map.triggerItems[id].onPlayerOut = (typeof opts.onPlayerOut == "function") ? opts.onPlayerOut : (function() {return true});
+       if(opts.shared) {
+         cur_map.triggerItems[id].shared = true;
+         cur_map.triggerItems[id].tr_name = item.attr("id");
+         svarsCallback[item.attr("id") + "_state"] = function(pid, value) {
+           if(value == "over") cur_map.triggerItems[id].onPlayerOver();
+           if(value == "out") cur_map.triggerItems[id].onPlayerOut();
+         };
+         if(svars[item.attr("id") + "_state"]) {
+           var value = svars[item.attr("id") + "_state"];
+           if(value == "over") cur_map.triggerItems[id].onPlayerOver();
+           if(value == "out") cur_map.triggerItems[id].onPlayerOut();
+         };
+       };
+     };
+   };
+ },
+ createItem: function(it_name, it_opts) {
+   if(typeof it_name != "string" || cur_map.items[it_name]) return map;
+   if(typeof it_opts != "object") it_opts = {};
+   var item = $("<div></div>")
+// DEBUG ONLY
+     .click(function() { alert("#" + this.id + "\nposition: " + this.style.left + " " + this.style.top + " " + this.style.width + " " + this.style.height) })
+
+     .attr("id", it_name)
+     .css({position: "absolute", zIndex: 1});
+   cur_map.items_cnt += 1;
+   cur_map.items[it_name] = {item: item, props: it_opts, needToApply: true};
+   return item;
+ },
+ getItem: function(elem) {
+   return (elem.jquery) ? elem : (cur_map.items[elem] ? cur_map.items[elem].item : $(elem));
+ },
+ getTexture: function(texture) {
+   return (typeof texture == "string") ? cur_map.textures[texture] : ((texture.newTexture) ? texture : null);
+ },
+ avatars: function(av_list) {
+   for(var i in av_list) {
+     var avatar = av_list[i];
+     cur_map.avatars.push((typeof avatar == "string") ? map.getTexture(avatar) : map.createTexture("avatar" + i, avatar).getTexture("avatar" + i))
+   };
+   return map;
+ },
+ fill: function(tex_name, elem) {
+   var elem = map.getItem(elem);
+   var texture  = map.getTexture(tex_name);
+   if(!texture) return map;
+   if(texture.color) elem.css({backgroundColor: texture.color});
+   if(texture.image) elem.css({backgroundImage: "url(" + cur_map.map_path + texture.image + ")"}); else
+     if(texture.extImage) elem.css({backgroundImage: "url('" + texture.extImage + "')"}); else
+       if(texture.custom) elem.css({background: texture.custom});
+   if(typeof texture.sides == "object") {
+     var sides = texture.sides;
+     if(typeof sides.left == "object" && sides.left.length == 2) {
+       $("<div style='position: absolute; left: 0px; top: 0px; height: 100%'></div>")
+        .css({width: (sides.left[0] || 0)})
+        .fill(sides.left[1] || null)
+        .appendTo(elem);
+     };
+     if(typeof sides.right == "object" && sides.right.length == 2) {
+       $("<div style='position: absolute; right: 0px; top: 0px; height: 100%'></div>")
+        .css({width: (sides.right[0] || 0)})
+        .fill(sides.right[1] || null)
+        .appendTo(elem);
+     };
+     if(typeof sides.top == "object" && sides.top.length == 2) {
+       $("<div style='position: absolute; left: 0px; top: 0px; width: 100%'></div>")
+        .css({height: (sides.top[0] || 0)})
+        .fill(sides.top[1] || null)
+        .appendTo(elem);
+     };
+     if(typeof sides.bottom == "object" && sides.bottom.length == 2) {
+       $("<div style='position: absolute; left: 0px; bottom: 0px; width: 100%'></div>")
+        .css({height: (sides.bottom[0] || 0)})
+        .fill(sides.bottom[1] || null)
+        .appendTo(elem);
+     };
+   };
+   if(typeof texture.corners == "object") {
+     var corners = texture.corners;
+     if(typeof corners.left_up == "object" && corners.left_up.length == 3) {
+       $("<div style='position: absolute; left: 0px; top: 0px'></div>")
+        .css({width:  (corners.left_up[0] || 0)})
+        .css({height: (corners.left_up[1] || 0)})
+        .fill((corners.left_up[2] || null))
+        .appendTo(elem);
+     };
+     if(typeof corners.left_down == "object" && corners.left_down.length == 3) {
+       $("<div style='position: absolute; left: 0px; bottom: 0px'></div>")
+        .css({width:  (corners.left_down[0] || 0)})
+        .css({height: (corners.left_down[1] || 0)})
+        .fill((corners.left_down[2] || null))
+        .appendTo(elem);
+     };
+     if(typeof corners.right_up == "object" && corners.right_up.length == 3) {
+       $("<div style='position: absolute; right: 0px; top: 0px'></div>")
+        .css({width:  (corners.right_up[0] || 0)})
+        .css({height: (corners.right_up[1] || 0)})
+        .fill((corners.right_up[2] || null))
+        .appendTo(elem);
+     };
+     if(typeof corners.right_down == "object" && corners.right_down.length == 3) {
+       $("<div style='position: absolute; bottom: 0px; right: 0px'></div>")
+        .css({width:  (corners.right_down[0] || 0)})
+        .css({height: (corners.right_down[1] || 0)})
+        .fill((corners.right_down[2] || null))
+        .appendTo(elem);
+     };
+   };
+   return map;
+ },
+ js: function(code) {
+   if(typeof code == "function") code();
+   return map;
+ },
+ movePlayer: function(x, y) {
+   socket.send({act: "move_a", x: parseInt(x), y: parseInt(y)});
+   myPlayer.css({left: parseInt(x), top: parseInt(y)});
+   cur_map.activeTrigger = null;
+   return map;
+ }
+};
+
+WEB_SOCKET_SWF_LOCATION = "resources/lib/vendor/web-socket-js/WebSocketMain.swf";
+GoGoGo();
+</script>
+</body>
+</html>
