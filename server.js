@@ -10,7 +10,7 @@ var http = require("http"),
     io = require("./lib/socket.io"),
     sys = require("sys"),
 
-MAP = "test",
+MAP = "test2",
 
 svars = [],
 messages = [],
